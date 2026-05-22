@@ -178,12 +178,15 @@ def stop() -> int:
     if not _pid_running(pid):
         print("Shim is not running.")
         PID_PATH.unlink(missing_ok=True)
+        # Still restore config in case shim crashed without cleaning up.
+        _restore_if_managed()
         return 0
     os.kill(pid, signal.SIGTERM)
     for _ in range(50):
         if not _pid_running(pid):
             PID_PATH.unlink(missing_ok=True)
             print("Shim stopped.")
+            _restore_if_managed()
             return 0
         time.sleep(0.1)
     print(f"Shim pid {pid} did not exit after SIGTERM.", file=sys.stderr)
@@ -202,6 +205,15 @@ def restore_codex_config() -> None:
         restored = _remove_section(restored, "model_providers.factory_byok_shim")
         CODEX_CONFIG_PATH.write_text(restored.lstrip())
         print(f"Removed shim config from {CODEX_CONFIG_PATH}.")
+
+
+def _restore_if_managed() -> None:
+    """Restore config only if it's currently managed by the shim."""
+    if CODEX_CONFIG_BACKUP_PATH.exists():
+        restore_codex_config()
+        return
+    if CODEX_CONFIG_PATH.exists() and MANAGED_BEGIN in CODEX_CONFIG_PATH.read_text():
+        restore_codex_config()
 
 
 def status(port: int) -> int:
@@ -233,10 +245,25 @@ def exec_codex(settings_path: Path, port: int, codex_args: list[str]) -> None:
 
 
 def exec_codex_app(settings_path: Path, port: int, path: str) -> None:
+    import atexit
+
+    def _cleanup():
+        _restore_if_managed()
+        stop()
+
+    atexit.register(_cleanup)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: sys.exit(0))
+
     _quit_codex_app()
     args = ["codex", "app", path]
-    subprocess.Popen(args)
+    proc = subprocess.Popen(args)
     _foreground_codex_app()
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
 
 
 def _quit_codex_app() -> None:
@@ -354,17 +381,16 @@ def _resign_codex_app() -> None:
 
 
 def _foreground_codex_app() -> None:
+    # Wait a beat for Codex to finish launching before trying to raise the window.
+    # Using a longer initial delay avoids the race where the app exists but has
+    # no windows yet, which previously caused a spurious Cmd+N new-window.
     script = '''
 tell application "Codex" to activate
-delay 0.5
+delay 1.2
 tell application "System Events"
   if exists process "Codex" then
     tell process "Codex"
       set frontmost to true
-      if (count of windows) is 0 then
-        keystroke "n" using command down
-        delay 0.3
-      end if
       if (count of windows) > 0 then
         set position of window 1 to {80, 60}
         set size of window 1 to {1400, 980}

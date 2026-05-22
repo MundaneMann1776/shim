@@ -846,11 +846,50 @@ async def _error_response(upstream) -> web.Response:
 
 
 def main(argv: list[str] | None = None) -> None:
+    import atexit
+    import signal as _signal
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--settings", type=Path, default=DEFAULT_FACTORY_SETTINGS)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args(argv)
+
+    # Safety net: restore ~/.codex/config.toml whenever this server process
+    # exits — whether cleanly (SIGTERM from `codex-shim stop`) or via crash.
+    # Without this, a crashed/killed server leaves Codex pointed at a dead
+    # local proxy and the UI shows an empty session list.
+    _codex_config = Path.home() / ".codex" / "config.toml"
+    _shim_dir = Path(__file__).resolve().parents[1] / ".codex-shim"
+    _backup = _shim_dir / "config.toml.before-codex-shim"
+    _managed_begin = "# >>> codex-shim managed >>>"
+    _managed_end = "# <<< codex-shim managed <<<"
+
+    def _restore_config() -> None:
+        try:
+            if _backup.exists():
+                _codex_config.write_text(_backup.read_text())
+                _backup.unlink(missing_ok=True)
+            elif _codex_config.exists() and _managed_begin in _codex_config.read_text():
+                text = _codex_config.read_text()
+                while _managed_begin in text:
+                    before, rest = text.split(_managed_begin, 1)
+                    if _managed_end not in rest:
+                        text = before
+                        break
+                    _, after = rest.split(_managed_end, 1)
+                    text = before + after
+                _codex_config.write_text(text.lstrip())
+        except Exception:
+            pass
+
+    atexit.register(_restore_config)
+
+    def _handle_signal(signum, frame):
+        raise SystemExit(0)
+
+    for sig in (_signal.SIGTERM, _signal.SIGINT):
+        _signal.signal(sig, _handle_signal)
 
     shim = ShimServer(args.settings)
     web.run_app(shim.app(), host=args.host, port=args.port, handle_signals=True)
