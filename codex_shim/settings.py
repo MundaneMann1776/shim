@@ -81,6 +81,22 @@ class ProvidersSettings:
             providers[provider_key]["enabled"] = enabled
             self._save(data)
 
+    # ── reasoning effort (global, applied to all shim-routed models) ──────
+
+    REASONING_LEVELS = ("low", "medium", "high")
+
+    def get_reasoning_effort(self) -> str:
+        """Return the persisted reasoning effort, defaulting to 'medium'."""
+        value = str(self._load().get("reasoningEffort") or "medium").lower()
+        return value if value in self.REASONING_LEVELS else "medium"
+
+    def set_reasoning_effort(self, effort: str) -> None:
+        if effort not in self.REASONING_LEVELS:
+            raise ValueError(f"Unsupported reasoning effort: {effort}")
+        data = self._load()
+        data["reasoningEffort"] = effort
+        self._save(data)
+
     # ── model upsert (called when user picks a model) ─────────────────────
 
     def upsert_custom_model(

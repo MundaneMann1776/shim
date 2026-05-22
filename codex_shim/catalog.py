@@ -14,7 +14,13 @@ def catalog_entry(model: FactoryModel) -> dict:
     compact = max(8_000, int(context * 0.8))
     truncation = min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
-    return {
+    supported_reasoning_levels = [
+        {"effort": "low", "description": "Faster, lighter reasoning"},
+        {"effort": "medium", "description": "Balanced speed and reasoning"},
+        {"effort": "high", "description": "Deeper reasoning"},
+        {"effort": "xhigh", "description": "Maximum reasoning where supported"},
+    ]
+    entry = {
         # The Codex binary identifies models by "model" (not "slug") when
         # looking up displayName for the frontend.  Include both so that the
         # config's `model = "<slug>"` round-trips correctly.
@@ -27,12 +33,7 @@ def catalog_entry(model: FactoryModel) -> dict:
         "auto_compact_token_limit": compact,
         "truncation_policy": {"mode": "tokens", "limit": truncation},
         "default_reasoning_level": reasoning,
-        "supported_reasoning_levels": [
-            {"effort": "low", "description": "Faster, lighter reasoning"},
-            {"effort": "medium", "description": "Balanced speed and reasoning"},
-            {"effort": "high", "description": "Deeper reasoning"},
-            {"effort": "xhigh", "description": "Maximum reasoning where supported"},
-        ],
+        "supported_reasoning_levels": supported_reasoning_levels,
         "default_reasoning_summary": "none",
         "reasoning_summary_format": "none",
         "supports_reasoning_summaries": False,
@@ -63,11 +64,20 @@ def catalog_entry(model: FactoryModel) -> dict:
             "instructions_variables": {"model_name": model.display_name},
         },
     }
+    entry.update(_frontend_aliases(entry, model.display_name, supported_reasoning_levels))
+    return entry
 
 
 def chatgpt_passthrough_entry() -> dict:
     """Catalog entry for the original GPT-5.5 routed through ChatGPT passthrough."""
-    return {
+    supported_reasoning_levels = [
+        {"effort": "minimal", "description": "Minimal reasoning"},
+        {"effort": "low", "description": "Faster, lighter reasoning"},
+        {"effort": "medium", "description": "Balanced"},
+        {"effort": "high", "description": "Deeper reasoning"},
+        {"effort": "xhigh", "description": "Maximum reasoning"},
+    ]
+    entry = {
         "model": "gpt-5.5",
         "slug": "gpt-5.5",
         "display_name": "GPT-5.5",
@@ -77,13 +87,7 @@ def chatgpt_passthrough_entry() -> dict:
         "auto_compact_token_limit": 320000,
         "truncation_policy": {"mode": "tokens", "limit": 64000},
         "default_reasoning_level": "medium",
-        "supported_reasoning_levels": [
-            {"effort": "minimal", "description": "Minimal reasoning"},
-            {"effort": "low", "description": "Faster, lighter reasoning"},
-            {"effort": "medium", "description": "Balanced"},
-            {"effort": "high", "description": "Deeper reasoning"},
-            {"effort": "xhigh", "description": "Maximum reasoning"},
-        ],
+        "supported_reasoning_levels": supported_reasoning_levels,
         "default_reasoning_summary": "auto",
         "reasoning_summary_format": "experimental",
         "supports_reasoning_summaries": True,
@@ -111,6 +115,31 @@ def chatgpt_passthrough_entry() -> dict:
             "instructions_template": "You are Codex, a coding agent powered by GPT-5.5.",
             "instructions_variables": {"model_name": "GPT-5.5"},
         },
+    }
+    entry.update(_frontend_aliases(entry, "GPT-5.5", supported_reasoning_levels))
+    return entry
+
+
+def _frontend_aliases(entry: dict, display_name: str, supported_reasoning_levels: list[dict]) -> dict:
+    """Keep the catalog compatible with both Rust config and Electron UI shapes."""
+    return {
+        "displayName": display_name,
+        "contextWindow": entry["context_window"],
+        "maxContextWindow": entry["max_context_window"],
+        "autoCompactTokenLimit": entry["auto_compact_token_limit"],
+        "defaultReasoningLevel": entry["default_reasoning_level"],
+        "supportedReasoningEfforts": [
+            {"reasoningEffort": item["effort"], "description": item["description"]}
+            for item in supported_reasoning_levels
+        ],
+        "supportedReasoningLevels": supported_reasoning_levels,
+        "supportsReasoningSummaries": entry["supports_reasoning_summaries"],
+        "defaultReasoningSummary": entry["default_reasoning_summary"],
+        "supportVerbosity": entry["support_verbosity"],
+        "defaultVerbosity": entry["default_verbosity"],
+        "supportedInApi": entry["supported_in_api"],
+        "isDefault": entry.get("isDefault", False),
+        "hidden": False,
     }
 
 
@@ -187,4 +216,3 @@ def _reasoning_effort(model: FactoryModel) -> str:
 
 def _toml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
-

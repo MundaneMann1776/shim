@@ -25,3 +25,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Built macOS app bundles — produced by bin/build-app
+Shim.app/
+Codex Shim.app/

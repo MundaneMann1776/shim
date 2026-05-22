@@ -31,6 +31,15 @@ def test_catalog_preserves_context_and_visibility():
     assert "free" in entry["available_in_plans"]
 
 
+def test_catalog_includes_frontend_display_aliases():
+    model = FactorySettingsFixture.one()
+    entry = catalog_entry(model)
+    assert entry["display_name"] == "Claude Opus"
+    assert entry["displayName"] == "Claude Opus"
+    assert entry["hidden"] is False
+    assert entry["supportedReasoningEfforts"][0]["reasoningEffort"] == "low"
+
+
 class FactorySettingsFixture:
     @staticmethod
     def one():
@@ -54,4 +63,3 @@ class FactorySettingsFixture:
             )
         )
         return FactorySettings(path).load()[0]
-

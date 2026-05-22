@@ -1,235 +1,173 @@
-# codex-shim
+# Shim
 
-Run **Codex Desktop** with any model declared in your `~/.factory/settings.json`
-(or any custom JSON file), plus an optional passthrough to your **ChatGPT
-subscription's GPT‑5.5** — without recompiling Codex.
+**One-click model switcher for Codex Desktop.**
 
-The shim is a small local Python server that pretends to be an OpenAI Responses
-API endpoint. Codex points at it; the shim routes each request to whatever
-upstream the matching Factory BYOK entry uses (OpenAI / Anthropic /
-generic-chat-completion-api / ChatGPT subscription).
+A macOS menubar app that lets you flip Codex Desktop between your **ChatGPT
+subscription** and any **BYOK provider** — DeepSeek, OpenRouter, Google,
+Anthropic, OpenAI, or anything OpenAI-compatible — without recompiling Codex,
+without restarting it, and without re-editing `~/.codex/config.toml` by hand.
 
-> Status: tested on Codex Desktop **0.133.0-alpha.1** for macOS arm64.
-> Linux/Windows users should be able to skip the ASAR patch section and use the
-> shim itself unchanged.
+Set reasoning effort from the same menu. Drop back to native subscription mode
+in one click and the shim gets entirely out of the path.
+
+> Status: tested on Codex Desktop **0.133.x** for macOS arm64 (Apple Silicon).
+> The local proxy itself is platform-agnostic Python; the menubar app is macOS-only.
 
 ---
 
-## Why
+## What it actually does
 
-Codex Desktop only shows the models its server-side Statsig config whitelists.
-If you have OpenAI / Anthropic / Z.ai / DeepSeek / Gemini / OpenRouter / Factory
-keys you'd like to use **as first-class models in the picker**, this gets you
-there. It also lets you keep your ChatGPT subscription's GPT‑5.5 visible
-alongside everything else.
+```
+        ┌────────────────────────────────────────────┐
+        │ ☰  Shim                                    │
+        │ ● Active: DeepSeek — DeepSeek-V3.1         │
+        │ ─────                                       │
+        │ ChatGPT Subscription (native, no shim)     │
+        │ ─────                                       │
+        │ DeepSeek                              ▶    │
+        │ OpenRouter (334 models)               ▶    │
+        │ Google                                ▶    │
+        │ ─────                                       │
+        │ Status: Running • pid 12345                │
+        │ Reasoning (high)                      ▶    │
+        │ Manage API Keys…                           │
+        └────────────────────────────────────────────┘
+```
+
+Click a model → Codex's `~/.codex/config.toml` is rewritten with a managed
+block pointing at the local shim, the shim is started if needed, and Codex
+picks it up on its next request. Click "ChatGPT Subscription" → managed block
+is stripped, shim is stopped, Codex talks to chatgpt.com directly via its OAuth
+tokens. No middleman, no extra latency, no failure mode if the shim crashes.
 
 ---
 
 ## Install
 
+Requires macOS 13+, Python 3.11+, and Codex Desktop already installed.
+
 ```bash
-git clone https://github.com/<you>/codex-shim ~/Documents/codex-shim
+git clone https://github.com/MundaneMann1776/codex-shim ~/Documents/codex-shim
 cd ~/Documents/codex-shim
-python3 -m pip install --user aiohttp pytest    # only runtime dep is aiohttp
-ln -s "$PWD/bin/codex-shim" ~/.local/bin/codex-shim
-ln -s "$PWD/bin/codex-app"  ~/.local/bin/codex-app
-ln -s "$PWD/bin/codex-model" ~/.local/bin/codex-model
+python3 -m venv .venv
+.venv/bin/pip install -e .
+bin/build-app                       # compiles the Mach-O launcher → Shim.app
+open Shim.app                       # menubar icon appears
 ```
 
-Requires Python 3.11+.
+Add it to **System Settings → General → Login Items** if you want it always
+running.
 
 ---
 
-## Quick start
+## Using it
 
-### 1. Generate the catalog and start the shim
+1. Open **Shim** in your menubar.
+2. **Manage API Keys…** → paste your DeepSeek / OpenRouter / Google / etc. key.
+   The provider's models show up as submenus within seconds.
+3. Click any model. Codex picks it up on the next request.
+4. **Reasoning ▶ low / medium / high** sets `model_reasoning_effort` in the
+   managed block. Persists across switches.
+5. **ChatGPT Subscription (native, no shim)** at any time = full restore. The
+   managed block is removed, the shim daemon stops, Codex falls back to its
+   OAuth-authenticated chatgpt.com path.
 
-```bash
-codex-shim generate          # reads ~/.factory/settings.json, writes catalog
-codex-shim start             # background daemon on 127.0.0.1:8765
-codex-shim list              # show generated slugs and upstream routes
-codex-shim status            # health probe
-```
-
-### 2. Point Codex Desktop at it (no global config changes)
-
-```bash
-codex-shim app .             # launch Codex with the shim wired in
-```
-
-That command applies opt-in `-c` overrides only for this launch. Your
-`~/.codex/config.toml` is left untouched. After this Codex Desktop sees every
-entry from `~/.factory/settings.json` plus an optional `OpenAI GPT-5.5
-(ChatGPT)` slug as picker entries.
-
-If your Codex Desktop's model picker only shows "default" and refuses to render
-the catalog entries, you also need the **picker patch** below.
-
-### 3. (Optional) Switch the active Desktop model
-
-```bash
-codex-model list
-codex-model openai-gpt-5-5    # or any other slug from `list`
-codex-app                     # relaunch Codex with new default
-```
+Your `~/.codex/config.toml` is backed up to
+`.codex-shim/config.toml.before-codex-shim` on first install and restored on
+Quit or on subscription mode.
 
 ---
 
-## Custom config file
+## CLI
 
-The shim defaults to `~/.factory/settings.json` (the file Factory.ai writes
-when you save BYOK custom models). You can point it at any file:
+Same flows are exposed for headless use:
 
-```bash
-codex-shim --settings /path/to/my-models.json generate
-codex-shim --settings /path/to/my-models.json start
+```
+codex-shim start                       # daemon on 127.0.0.1:8765
+codex-shim model use <slug>            # switch active model
+codex-shim status                      # health check
+codex-shim stop                        # restore config + stop daemon
+codex-shim restart
+codex-shim list                        # show available models + routes
+codex-shim app [path]                  # launch Codex Desktop wired into shim
+codex-shim codex -- <args>             # exec `codex` CLI through shim
 ```
 
-Schema expected (Factory's own format):
-
-```json
-{
-  "customModels": [
-    {
-      "model": "gpt-5.5",
-      "provider": "openai",
-      "baseUrl": "https://api.openai.com/v1",
-      "apiKey": "sk-…",
-      "displayName": "OpenAI GPT-5.5",
-      "maxContextLimit": 400000
-    },
-    {
-      "model": "claude-opus-4-7-20251109",
-      "provider": "anthropic",
-      "baseUrl": "https://api.anthropic.com/v1",
-      "apiKey": "sk-ant-…",
-      "displayName": "Claude Opus 4.7"
-    },
-    {
-      "model": "deepseek-v4-pro",
-      "provider": "anthropic",
-      "baseUrl": "https://api.deepseek.com/anthropic",
-      "apiKey": "…",
-      "displayName": "DeepSeek V4 Pro",
-      "noImageSupport": true
-    }
-  ]
-}
-```
-
-The shim **never copies your API keys** into the generated catalog. Keys stay
-in your settings file and are read fresh on every request.
-
-Supported `provider` values:
-
-| provider | upstream API |
-|---|---|
-| `openai` | OpenAI/`/v1/chat/completions` |
-| `generic-chat-completion-api` | OpenAI-shaped chat completions |
-| `anthropic` | Anthropic `/v1/messages` |
+All commands accept `--settings <path>` and `--port <port>`.
 
 ---
 
-## Picker patch for Codex Desktop on macOS
+## Picker patch (one-time, optional)
 
-Codex Desktop has a Statsig server-side allowlist (`use_hidden_models: true`)
-that hides any model whose slug isn't on a hardcoded list. Custom catalog
-entries fall into the hidden bucket and never render in the picker.
-
-A single‑boolean ASAR patch flips the allowlist branch off so the picker only
-checks the local `hidden` flag (which our catalog never sets).
-
-> **Always back up `app.asar` and `Info.plist` before patching.**
+Codex Desktop's frontend uses a Statsig allowlist that hides any model whose
+slug isn't on a hardcoded list. The shim's catalog entries fall into the
+hidden bucket and won't render in Codex's in-app model picker — even though
+the model is functional. Patch flips one boolean in `app.asar`:
 
 ```bash
-APP=/Applications/Codex.app
-sudo cp -R "$APP" "$APP.unpatched-$(date +%Y%m%d-%H%M%S)"
-
-# 1. Extract the ASAR
-cd /tmp && rm -rf codex-asar-patch && mkdir codex-asar-patch && cd codex-asar-patch
-npx --yes @electron/asar extract "$APP/Contents/Resources/app.asar" extracted
-
-# 2. Patch the picker filter (this match is single-occurrence, unique to that file)
-PATCH_FILE=$(grep -RIl 'useHiddenModels' extracted/webview/assets/model-queries-*.js | head -n1)
-sed -i.bak -E 's/let u=c\.useHiddenModels&&o!==`amazonBedrock`,d;/let u=!1,d;/' "$PATCH_FILE"
-diff "$PATCH_FILE.bak" "$PATCH_FILE" || true   # confirm exactly one change
-rm "$PATCH_FILE.bak"
-
-# 3. Repack
-npx --yes @electron/asar pack extracted app.asar.new
-sudo cp app.asar.new "$APP/Contents/Resources/app.asar"
+codex-shim patch-app                   # one-time, backs up app.asar first
+codex-shim restore-app                 # undo
 ```
 
-That alone will crash Codex on next launch with `EXC_BREAKPOINT`. Electron's
-`ElectronAsarIntegrity` field in `Info.plist` is a SHA-256 of the **JSON
-header** of the asar archive (not the whole file). Recompute it and re-sign:
-
-```bash
-# 4. Compute new header hash
-HEADER_HASH=$(python3 - "$APP/Contents/Resources/app.asar" <<'PY'
-import struct, hashlib, sys
-with open(sys.argv[1], 'rb') as f:
-    data_size, header_size, _, json_size = struct.unpack('<4I', f.read(16))
-    header_json = f.read(json_size)
-print(hashlib.sha256(header_json).hexdigest())
-PY
-)
-echo "new header hash: $HEADER_HASH"
-
-# 5. Patch Info.plist (replaces the hash for Resources/app.asar)
-sudo /usr/libexec/PlistBuddy -c \
-  "Set :ElectronAsarIntegrity:Resources/app.asar:hash $HEADER_HASH" \
-  "$APP/Contents/Info.plist"
-
-# 6. Ad-hoc re-sign (drops Apple signature; Gatekeeper will warn once)
-sudo codesign --force --deep --sign - "$APP"
-
-# 7. Launch
-open "$APP"
-```
-
-To roll back: `sudo rm -rf "$APP" && sudo mv "$APP.unpatched-…" "$APP"`.
+If you only use the menubar to switch (and don't open Codex's own picker
+dropdown), this is unnecessary.
 
 ---
 
-## ChatGPT GPT‑5.5 passthrough (optional)
-
-If you have a ChatGPT plan with Codex access (`~/.codex/auth.json` exists with
-`auth_mode: chatgpt`), the shim exposes one synthetic slug
-`openai-gpt-5-5` (display name `OpenAI GPT-5.5 (ChatGPT)`) that proxies
-straight to `https://chatgpt.com/backend-api/codex/responses` with your access
-token. It bypasses Factory entirely and uses your ChatGPT subscription quota.
-
-It's already in `.codex-shim/custom_model_catalog.json` after `codex-shim
-generate`. Just select it in the picker.
-
-If you don't want it, delete the entry with slug `openai-gpt-5-5` from the
-generated catalog, or run with `CODEX_SHIM_DISABLE_CHATGPT=1` (TODO).
-
----
-
-## How the routing works
+## How routing works
 
 ```
-Codex Desktop ── /v1/responses ──▶ codex-shim (127.0.0.1:8765)
+Codex Desktop ── /v1/responses ──▶ shim (127.0.0.1:8765)
                                      │
-                                     ├── slug "openai-gpt-5-5"
+                                     ├── slug "gpt-5.5" *
                                      │       └─▶ chatgpt.com/backend-api/codex/responses
-                                     │           (Authorization: Bearer <auth.json access_token>)
+                                     │           (Bearer access_token from ~/.codex/auth.json)
                                      │
                                      ├── provider "openai" / "generic-…"
                                      │       └─▶ baseUrl/chat/completions
-                                     │           (Authorization: Bearer apiKey)
+                                     │           (Bearer apiKey)
                                      │
                                      └── provider "anthropic"
                                              └─▶ baseUrl/messages
-                                                 (x-api-key: apiKey, anthropic-version: …)
+                                                 (x-api-key, anthropic-version)
 ```
+
+`*` Only used if you keep the shim-routed subscription entry. Clicking
+"ChatGPT Subscription (native, no shim)" bypasses this entirely.
 
 The shim translates Codex's Responses-API request into the upstream's shape
 (chat completions or Anthropic Messages) and translates the streamed reply
 back. Extended-thinking blocks from Anthropic-shaped upstreams (Claude,
-DeepSeek, GLM) round-trip through `reasoning.encrypted_content` items.
+DeepSeek-R1, GLM) round-trip through `reasoning.encrypted_content` items.
+
+---
+
+## Supported providers
+
+| provider key | upstream API | reasoning |
+|---|---|---|
+| `openai` | OpenAI `/v1/chat/completions` | ✓ (o-series) |
+| `generic-chat-completion-api` | OpenAI-shaped chat completions | depends on model |
+| `anthropic` | Anthropic `/v1/messages` | ✓ |
+| `deepseek` | OpenAI-compatible | ✓ (R1) |
+| `openrouter` | OpenAI-compatible (334+ models) | depends on model |
+| `google` | Gemini OpenAI-compatible endpoint | ✓ (2.5 Thinking) |
+
+Add a provider in the menubar (**Manage API Keys…**) or by editing
+`~/.factory/settings.json` directly.
+
+---
+
+## File layout
+
+```
+codex_shim/             python: server, cli, menubar, translation
+bin/build-app           compile Shim.app launcher (Mach-O + embedded Python)
+assets/AppIcon.icns     menubar app icon source
+tests/                  pytest suite
+.codex-shim/            generated catalog / config backup / logs / pid (gitignored)
+Shim.app/               built menubar app bundle (gitignored)
+```
 
 ---
 
@@ -241,48 +179,23 @@ Codex Desktop forwards three generic MCP tools to every model:
 - `list_mcp_resource_templates`
 - `read_mcp_resource`
 
-It does **not** flatten individual MCP server tools into the function list.
-That's a Codex client behavior, not a shim limitation. Shim-routed models
-receive the same MCP tools as built-in OpenAI models. The model is expected
-to call `list_mcp_resources` to discover what's available.
+Shim-routed models receive the same MCP tool surface as built-in OpenAI
+models. The model is expected to call `list_mcp_resources` to discover what's
+available — Codex does not flatten individual MCP server tools into the
+function list (that's a Codex client behavior, not a shim limitation).
 
 ---
 
-## Commands
+## What the shim does not do
 
-```
-codex-shim generate         regenerate catalog/config without starting daemon
-codex-shim start            start local shim daemon
-codex-shim status           health check + model count
-codex-shim stop             stop daemon
-codex-shim restart          restart daemon
-codex-shim list             list generated slugs and Factory routes
-codex-shim model list       list slugs currently usable in the picker
-codex-shim model use <slug> set the Desktop default model
-codex-shim codex -- <args>  exec `codex` CLI through the shim
-codex-shim app [path]       launch Codex Desktop through the shim
-
-codex-app [path]            shortcut for `codex-shim app`
-codex-model [list|<slug>]   shortcut for `codex-shim model …`
-```
-
-All commands accept `--settings <path>` and `--port <port>`.
-
----
-
-## File layout
-
-```
-codex_shim/             python source (server + cli + translation)
-bin/codex-shim          main entrypoint
-bin/codex-app           shortcut wrapping `codex-shim app`
-bin/codex-model         shortcut wrapping `codex-shim model …`
-.codex-shim/            generated catalog, config, logs, pid (gitignored)
-tests/                  pytest suite
-```
-
-The shim never edits `~/.codex/config.toml`. All Codex overrides are passed
-inline as `-c key=value` arguments per launch.
+- **Does not** store or copy your API keys into the generated catalog. Keys
+  live in `~/.factory/settings.json` and are read fresh on each request.
+- **Does not** modify Codex's binary. The optional ASAR patch only flips one
+  boolean in `app.asar` and is fully reversible.
+- **Does not** touch `~/.codex/auth.json`. Your subscription OAuth tokens are
+  read for the (optional) GPT-5.5 passthrough, never written.
+- **Does not** auto-update Codex's config without your action. Every change
+  comes from a menu click or CLI command.
 
 ---
 

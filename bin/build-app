@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# build-app — installs codex-shim into ~/Library (TCC-safe) and compiles a
+# native Mach-O launcher so macOS can start it properly as an .app bundle.
+# Run once after setup, and after `git pull` to pick up code changes.
+#
+# Usage:  bin/build-app [--install]
+#   --install   also symlinks the app into ~/Applications/
+
+set -euo pipefail
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+APP_BUNDLE="$PROJECT_ROOT/Shim.app"
+LAUNCHER="$APP_BUNDLE/Contents/MacOS/codex-shim-app"
+INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
+
+# ~/Library is NOT TCC-restricted — the app can import from here without a
+# "Files & Folders" permission prompt.
+APP_SUPPORT="$HOME/Library/Application Support/codex-shim"
+INSTALL_DIR="$APP_SUPPORT/lib"
+ENTRY_SCRIPT="$APP_SUPPORT/run.py"
+
+echo "→ Project root:  $PROJECT_ROOT"
+echo "→ Install dir:   $INSTALL_DIR"
+
+# --- Resolve the base Python from the venv ---
+PYVENV_CFG="$PROJECT_ROOT/.venv/pyvenv.cfg"
+if [ ! -f "$PYVENV_CFG" ]; then
+    echo "ERROR: .venv not found. Run: python3 -m venv .venv && .venv/bin/pip install -e ." >&2
+    exit 1
+fi
+
+PYTHON_HOME="$(grep '^home = ' "$PYVENV_CFG" | sed 's/home = //' | tr -d '[:space:]')"
+PYTHON_VER="$(grep '^version = ' "$PYVENV_CFG" | sed 's/version = //' | cut -d. -f1-2 | tr -d '[:space:]')"
+PYTHON="$PYTHON_HOME/python${PYTHON_VER}"
+PYTHON_CONFIG="$PYTHON_HOME/python${PYTHON_VER}-config"
+
+if [ ! -x "$PYTHON" ]; then PYTHON="$PYTHON_HOME/python3"; fi
+if [ ! -x "$PYTHON" ]; then
+    echo "ERROR: Python $PYTHON_VER not found at $PYTHON_HOME" >&2
+    exit 1
+fi
+if [ ! -x "$PYTHON_CONFIG" ]; then PYTHON_CONFIG="$PYTHON_HOME/python3-config"; fi
+if [ ! -x "$PYTHON_CONFIG" ]; then
+    echo "ERROR: python-config not found at $PYTHON_HOME" >&2
+    exit 1
+fi
+echo "→ Python:        $PYTHON"
+echo "→ Python config: $PYTHON_CONFIG"
+
+# --- Install the package to ~/Library ---
+echo "→ Installing package…"
+mkdir -p "$INSTALL_DIR"
+"$PYTHON" -m pip install --quiet --upgrade --target "$INSTALL_DIR" "$PROJECT_ROOT"
+echo "→ Package installed."
+
+# --- Write the Python entry point to ~/Library ---
+mkdir -p "$APP_SUPPORT"
+cat > "$ENTRY_SCRIPT" <<PYEOF
+import sys
+sys.path.insert(0, "$INSTALL_DIR")
+from codex_shim.menubar import main
+main()
+PYEOF
+echo "→ Entry script:  $ENTRY_SCRIPT"
+
+# --- Compile a native Mach-O launcher with embedded Python. ---
+# Keeping Python inside this process preserves the app bundle identity, which
+# makes the app behave like a normal LSUIElement menu-bar app.
+TMP_C="$(mktemp /tmp/codex_shim_launcher_XXXXXX.c)"
+trap "rm -f $TMP_C" EXIT
+
+cat > "$TMP_C" <<CSRC
+#include <Python.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+static const char *LOG_DIR  = "$HOME/Library/Logs/codex-shim";
+static const char *LOG_PATH = "$HOME/Library/Logs/codex-shim/app.log";
+static const char *INSTALL_DIR = "$INSTALL_DIR";
+static const char *PYTHON = "$PYTHON";
+
+int main(void) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "/bin/mkdir -p '%s'", LOG_DIR);
+    system(cmd);
+
+    int fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+
+    setenv("CODEX_SHIM_PYTHON", PYTHON, 1);
+
+    PyConfig config;
+    PyConfig_InitPythonConfig(&config);
+    config.isolated = 0;
+    config.use_environment = 1;
+
+    wchar_t *program = Py_DecodeLocale("codex-shim-app", NULL);
+    if (program == NULL) {
+        fprintf(stderr, "codex-shim-app: could not decode program name\\n");
+        return 1;
+    }
+
+    PyStatus status = PyConfig_SetString(&config, &config.program_name, program);
+    if (!PyStatus_Exception(status)) {
+        status = Py_InitializeFromConfig(&config);
+    }
+    PyConfig_Clear(&config);
+    PyMem_RawFree(program);
+
+    if (PyStatus_Exception(status)) {
+        Py_ExitStatusException(status);
+    }
+
+    char script[4096];
+    snprintf(
+        script,
+        sizeof(script),
+        "import sys\\n"
+        "sys.path.insert(0, %c%s%c)\\n"
+        "from codex_shim.menubar import main\\n"
+        "main()\\n",
+        '"',
+        INSTALL_DIR,
+        '"'
+    );
+
+    int result = PyRun_SimpleString(script);
+    if (Py_FinalizeEx() < 0) {
+        return 120;
+    }
+    return result == 0 ? 0 : 1;
+}
+CSRC
+
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/Resources"
+if [ -f "$PROJECT_ROOT/assets/AppIcon.icns" ]; then
+    cp "$PROJECT_ROOT/assets/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+cat > "$INFO_PLIST" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.factory.codex-shim</string>
+    <key>CFBundleName</key>
+    <string>Shim</string>
+    <key>CFBundleDisplayName</key>
+    <string>Shim</string>
+    <key>CFBundleExecutable</key>
+    <string>codex-shim-app</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.2.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.2.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSFileQuarantineEnabled</key>
+    <false/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+</dict>
+</plist>
+PLIST
+echo "→ Info.plist:    $INFO_PLIST"
+
+PY_CFLAGS="$("$PYTHON_CONFIG" --embed --cflags)"
+PY_LDFLAGS="$("$PYTHON_CONFIG" --embed --ldflags)"
+
+clang -Os -o "$LAUNCHER" "$TMP_C" \
+    $PY_CFLAGS \
+    $PY_LDFLAGS \
+    -framework Foundation \
+    -mmacosx-version-min=13.0 \
+    -arch arm64 2>&1 || {
+    # Intel fallback (or universal)
+    clang -Os -o "$LAUNCHER" "$TMP_C" \
+        $PY_CFLAGS \
+        $PY_LDFLAGS \
+        -framework Foundation \
+        -mmacosx-version-min=13.0 2>&1
+}
+echo "→ Launcher compiled: $LAUNCHER"
+
+# --- Clear quarantine ---
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null 2>&1 || true
+
+# --- Optionally install into ~/Applications/ ---
+if [[ "${1:-}" == "--install" ]]; then
+    USER_APPS="$HOME/Applications"
+    mkdir -p "$USER_APPS"
+    TARGET="$USER_APPS/Shim.app"
+    rm -rf "$USER_APPS/Codex Shim.app"
+    rm -rf "$TARGET"
+    cp -R "$APP_BUNDLE" "$TARGET"
+    xattr -cr "$TARGET" 2>/dev/null || true
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -f "$TARGET" 2>/dev/null || true
+    echo "→ Installed to:   $TARGET"
+fi
+
+echo ""
+echo "✓ Done!  Launch: open \"$APP_BUNDLE\""
+echo ""
+echo "Update workflow:  git pull && bin/build-app"
+echo "Login Items:      System Settings → General → Login Items → +"

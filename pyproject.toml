@@ -1,7 +1,7 @@
 [project]
-name = "codex-factory-shim"
-version = "0.2.0"
-description = "Opt-in Codex BYOK shim with macOS menu bar app."
+name = "codex-shim"
+version = "0.3.0"
+description = "One-click model switcher for Codex Desktop — toggle between ChatGPT subscription and DeepSeek / OpenRouter / Google / Anthropic / any OpenAI-compatible provider, with reasoning-effort control, from the macOS menubar."
 requires-python = ">=3.11"
 dependencies = [
   "aiohttp>=3.9",
@@ -12,7 +12,9 @@ dependencies = [
 codex-shim     = "codex_shim.cli:main"
 codex-shim-app = "codex_shim.menubar:main"
 
+[tool.setuptools.packages.find]
+include = ["codex_shim*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-

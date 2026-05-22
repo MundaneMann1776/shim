@@ -114,7 +114,12 @@ def generate(settings_path: Path, port: int) -> None:
     print("No files under ~/.codex were modified.")
 
 
-def install_codex_config(settings_path: Path, port: int, model_slug: str | None = None) -> None:
+def install_codex_config(
+    settings_path: Path,
+    port: int,
+    model_slug: str | None = None,
+    reasoning_effort: str | None = None,
+) -> None:
     models = FactorySettings(settings_path).load()
     default_slug = _resolve_model_slug(models, model_slug)
     provider_name = _provider_name_for_slug(settings_path, default_slug)
@@ -124,12 +129,26 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
     if MANAGED_BEGIN not in original and not CODEX_CONFIG_BACKUP_PATH.exists():
         CODEX_CONFIG_BACKUP_PATH.write_text(original)
     cleaned = _remove_managed_config(original)
-    cleaned = _remove_top_level_keys(cleaned, {"model", "model_provider", "model_catalog_json"})
+    cleaned = _remove_top_level_keys(
+        cleaned, {"model", "model_provider", "model_catalog_json", "model_reasoning_effort"}
+    )
     cleaned = _remove_section(cleaned, "model_providers.factory_byok_shim")
-    top_block, provider_block = _managed_config_blocks(default_slug, port, provider_name)
+    top_block, provider_block = _managed_config_blocks(
+        default_slug, port, provider_name, reasoning_effort
+    )
     CODEX_CONFIG_PATH.write_text(top_block + "\n" + cleaned.lstrip() + "\n" + provider_block)
     print(f"Installed shim config into {CODEX_CONFIG_PATH}.")
     print(f"Original backup: {CODEX_CONFIG_BACKUP_PATH}")
+
+
+def enter_subscription_mode() -> None:
+    """Hand control back to native Codex: stop the shim, strip managed config.
+
+    Codex Desktop then talks directly to chatgpt.com using the OAuth tokens in
+    ~/.codex/auth.json — no local hop, nothing to crash.
+    """
+    stop()
+    restore_codex_config()
 
 
 def list_models(settings_path: Path) -> int:
@@ -147,7 +166,7 @@ def start(settings_path: Path, port: int) -> int:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     log = LOG_PATH.open("ab")
     cmd = [
-        sys.executable,
+        _server_python_executable(),
         "-m",
         "codex_shim.server",
         "--settings",
@@ -172,6 +191,10 @@ def start(settings_path: Path, port: int) -> int:
         time.sleep(0.1)
     print(f"Shim process started but health check timed out. See {LOG_PATH}.", file=sys.stderr)
     return 1
+
+
+def _server_python_executable() -> str:
+    return os.environ.get("CODEX_SHIM_PYTHON") or sys.executable
 
 
 def stop() -> int:
@@ -406,12 +429,20 @@ end tell
         pass
 
 
-def _managed_config_blocks(default_slug: str, port: int, provider_name: str = "Factory BYOK Shim") -> tuple[str, str]:
+def _managed_config_blocks(
+    default_slug: str,
+    port: int,
+    provider_name: str = "Factory BYOK Shim",
+    reasoning_effort: str | None = None,
+) -> tuple[str, str]:
+    reasoning_line = (
+        f'model_reasoning_effort = "{reasoning_effort}"\n' if reasoning_effort else ""
+    )
     top_block = f'''{MANAGED_BEGIN}
 model = "{default_slug}"
 model_provider = "factory_byok_shim"
 model_catalog_json = "{CATALOG_PATH}"
-{MANAGED_END}
+{reasoning_line}{MANAGED_END}
 '''
 
     provider_block = f'''{MANAGED_BEGIN}

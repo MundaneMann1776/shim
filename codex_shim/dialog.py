@@ -144,11 +144,11 @@ def _manage_keys_loop(settings_path, app) -> None:
                 pkey, api_key = added
                 invalidate_cache(pkey, api_key)
                 import threading
-                import objc
+                from PyObjCTools import AppHelper
 
                 def _fetch_then_update(k=pkey, key=api_key):
                     get_models(k, key)
-                    objc.callOnMainThread(app._rebuild_and_poll)
+                    AppHelper.callAfter(app._rebuild_and_poll)
 
                 threading.Thread(target=_fetch_then_update, daemon=True).start()
             # loop back to show updated list
