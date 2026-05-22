@@ -132,10 +132,11 @@ def _make_model_callback(
         slug = _slug_for(model["id"])
         effort = ps.get_reasoning_effort()
         try:
-            generate(SETTINGS_PATH, DEFAULT_PORT)
-            install_codex_config(SETTINGS_PATH, DEFAULT_PORT, slug, reasoning_effort=effort)
-            if not _shim_running():
-                start(SETTINGS_PATH, DEFAULT_PORT)
+            with app._lock:
+                generate(SETTINGS_PATH, DEFAULT_PORT)
+                install_codex_config(SETTINGS_PATH, DEFAULT_PORT, slug, reasoning_effort=effort)
+                if not _shim_running():
+                    start(SETTINGS_PATH, DEFAULT_PORT)
         except Exception as exc:
             rumps.alert("Error switching model", str(exc))
             return
@@ -154,8 +155,9 @@ def _make_reasoning_callback(app: "CodexShimApp", effort: str) -> callable:
         active = _active_slug()
         if active and active != "gpt-5.5":
             try:
-                generate(SETTINGS_PATH, DEFAULT_PORT)
-                install_codex_config(SETTINGS_PATH, DEFAULT_PORT, active, reasoning_effort=effort)
+                with app._lock:
+                    generate(SETTINGS_PATH, DEFAULT_PORT)
+                    install_codex_config(SETTINGS_PATH, DEFAULT_PORT, active, reasoning_effort=effort)
             except Exception as exc:
                 rumps.alert("Could not apply reasoning effort", str(exc))
                 return
