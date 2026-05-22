@@ -83,14 +83,11 @@ def responses_to_anthropic(body: dict[str, Any], upstream_model: str, max_tokens
             if decoded is not None:
                 pending_thinking.append(decoded)
             else:
-                # Summary-only fallback: emit a plain `thinking` block (no
-                # signature). Anthropic requires `signature` on the original
-                # session; if we lack it, skip rather than upsetting strict
-                # APIs.
-                for summary in chat_msg.get("summary") or []:
-                    text = summary.get("text") if isinstance(summary, dict) else None
-                    if text:
-                        pending_thinking.append({"type": "thinking", "thinking": text, "signature": ""})
+                # Summary-only fallback: Anthropic requires a valid non-empty
+                # signature on every `thinking` block in multi-turn requests.
+                # We don't have one here, so skip rather than sending an empty
+                # signature that will cause a 400.
+                pass
             continue
         if role in {"system", "developer"}:
             system_parts.append(_content_to_text(chat_msg.get("content", "")))
@@ -446,7 +443,9 @@ _OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
 
 def _is_openai_reasoning_model(model: str) -> bool:
     """Return True if this is an OpenAI o-series reasoning model."""
-    m = model.lower().lstrip("openai/")
+    m = model.lower()
+    if m.startswith("openai/"):
+        m = m[len("openai/"):]
     return any(m.startswith(p) for p in _OPENAI_REASONING_PREFIXES)
 
 

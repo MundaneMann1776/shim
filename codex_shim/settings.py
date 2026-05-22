@@ -179,7 +179,10 @@ class FactorySettings:
         self.path = Path(path).expanduser()
 
     def load(self) -> list[FactoryModel]:
-        data = json.loads(self.path.read_text())
+        try:
+            data = json.loads(self.path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
         rows = data.get("customModels", [])
         model_counts: dict[str, int] = {}
         for row in rows:

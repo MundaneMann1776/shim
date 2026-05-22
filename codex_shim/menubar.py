@@ -32,8 +32,8 @@ from .settings import DEFAULT_FACTORY_SETTINGS, FactorySettings, ProvidersSettin
 SETTINGS_PATH = DEFAULT_FACTORY_SETTINGS
 LOG_PATH = RUNTIME_DIR / "shim.log"
 
-ICON_RUNNING = "⚡"
-ICON_STOPPED = "◌"
+ICON_RUNNING_SF = "dot.radiowaves.right"
+ICON_STOPPED_SF = "circle"
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ def _make_model_callback(
 
 class CodexShimApp(rumps.App):
     def __init__(self):
-        super().__init__(ICON_STOPPED, quit_button=None)
+        super().__init__("Codex Shim", title="", quit_button=None)
         # Hide from Dock — fire via a one-shot timer so the run loop is live.
         def _hide_dock(t):
             t.stop()
@@ -133,6 +133,31 @@ class CodexShimApp(rumps.App):
         self._timer = rumps.Timer(self._poll, 3)
         self._timer.start()
         self._poll(None)
+
+    # ------------------------------------------------------------------
+    # SF Symbol icon helper
+    # ------------------------------------------------------------------
+
+    def _set_sf_icon(self, symbol_name: str) -> None:
+        """Set the status bar icon using a native SF Symbol template image.
+
+        Template images auto-adapt to dark/light mode and the active-state
+        highlight colour — the correct macOS approach for menu-bar icons.
+        Falls back silently (icon stays blank/text) on any error.
+        """
+        try:
+            from AppKit import NSImage
+            img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+                symbol_name, None
+            )
+            if img is None:
+                return
+            img.setTemplate_(True)
+            btn = self._nsapp._nsstatusitem.button()
+            btn.setImage_(img)
+            btn.setTitle_("")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Menu construction
@@ -182,7 +207,9 @@ class CodexShimApp(rumps.App):
                         mi.state = (slug == active)
                         group_item.add(mi)
                     prov_item.add(group_item)
-                self.menu.add(prov_item)
+                if models:
+                    self.menu.add(prov_item)
+                    any_model_added = True
             else:
                 prov_item = rumps.MenuItem(defn["name"])
                 for m in models:
@@ -264,19 +291,22 @@ class CodexShimApp(rumps.App):
 
     def _on_refresh(self, _sender) -> None:
         """Force-refresh model lists from all providers (bust cache)."""
+        import objc
         ps = ProvidersSettings(SETTINGS_PATH)
         provs = ps.get_providers()
         for pkey, pinfo in provs.items():
             api_key = pinfo.get("apiKey", "")
             if api_key:
                 invalidate_cache(pkey, api_key)
-        threading.Thread(
-            target=lambda: (
-                [get_models(k, provs[k]["apiKey"]) for k in provs if provs[k].get("apiKey")],
-                self._rebuild_and_poll(),
-            ),
-            daemon=True,
-        ).start()
+
+        def _fetch_then_update():
+            for k in provs:
+                if provs[k].get("apiKey"):
+                    get_models(k, provs[k]["apiKey"])
+            # AppKit must be mutated on the main thread.
+            objc.callOnMainThread(self._rebuild_and_poll)
+
+        threading.Thread(target=_fetch_then_update, daemon=True).start()
         rumps.alert("Refreshing…", "Model lists will update momentarily.")
 
     def _on_manage_keys(self, _sender) -> None:
@@ -301,7 +331,7 @@ class CodexShimApp(rumps.App):
     def _poll(self, _timer) -> None:
         running = _shim_running()
         active  = _active_slug()
-        self.title = ICON_RUNNING if running else ICON_STOPPED
+        self._set_sf_icon(ICON_RUNNING_SF if running else ICON_STOPPED_SF)
         if hasattr(self, "_item_status"):
             pid = _read_pid()
             self._item_status.title = (

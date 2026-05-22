@@ -165,6 +165,8 @@ def _default_context(model: FactoryModel) -> int:
         return 200_000
     if "gpt-5" in lower:
         return 400_000
+    if "gemini-1.5-pro" in lower:
+        return 2_000_000
     if "gemini" in lower:
         return 1_000_000
     return 128_000

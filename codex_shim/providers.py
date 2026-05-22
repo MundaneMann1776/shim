@@ -135,6 +135,48 @@ def fetch_deepseek_models(api_key: str) -> list[dict]:
     return _cached(f"deepseek:{api_key[:8]}", _fetch)
 
 
+def fetch_google_models(api_key: str) -> list[dict]:
+    _FALLBACK = [
+        {"id": "gemini-2.5-pro",      "name": "Gemini 2.5 Pro",      "context": 1_000_000},
+        {"id": "gemini-2.5-flash",     "name": "Gemini 2.5 Flash",     "context": 1_000_000},
+        {"id": "gemini-2.0-flash",     "name": "Gemini 2.0 Flash",     "context": 1_000_000},
+        {"id": "gemini-2.0-flash-lite","name": "Gemini 2.0 Flash Lite","context": 1_000_000},
+        {"id": "gemini-1.5-pro",       "name": "Gemini 1.5 Pro",       "context": 2_000_000},
+        {"id": "gemini-1.5-flash",     "name": "Gemini 1.5 Flash",     "context": 1_000_000},
+    ]
+
+    # Model ids to skip — embedding, vision-only, legacy, AQA, etc.
+    _EXCLUDE = ("embedding", "aqa", "retrieval", "text-bison", "chat-bison",
+                "codechat", "gemma", "code-gecko")
+
+    def _fetch():
+        try:
+            data = _get_json(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                {},
+            )
+            results = []
+            for m in data.get("models", []):
+                mid = m.get("name", "").removeprefix("models/")
+                if not mid.startswith("gemini"):
+                    continue
+                if any(x in mid.lower() for x in _EXCLUDE):
+                    continue
+                # Only include models that support generateContent
+                methods = [mth.get("name", "") for mth in m.get("supportedGenerationMethods", [])]
+                if "generateContent" not in methods:
+                    continue
+                display = m.get("displayName") or mid
+                ctx = m.get("inputTokenLimit") or 1_000_000
+                results.append({"id": mid, "name": display, "context": ctx})
+            results.sort(key=lambda x: x["id"])
+            return results or _FALLBACK
+        except Exception:
+            return _FALLBACK
+
+    return _cached(f"google:{api_key[:8]}", _fetch)
+
+
 # Featured sub-providers shown in the OpenRouter submenu.
 # Models from other providers still appear under "Other".
 _OR_FEATURED = (
@@ -210,6 +252,13 @@ PROVIDER_DEFS: dict[str, dict] = {
         "key_hint": "sk-or-v1-...",
         "fetch": fetch_openrouter_models,
     },
+    "google": {
+        "name": "Google",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "wire": "generic-chat-completion-api",
+        "key_hint": "AIza...",
+        "fetch": fetch_google_models,
+    },
 }
 
 
@@ -220,6 +269,8 @@ def detect_provider(api_key: str) -> str | None:
         return "anthropic"
     if k.startswith("sk-or-v1-"):
         return "openrouter"
+    if k.startswith("AIza"):
+        return "google"
     return None  # can't distinguish OpenAI vs DeepSeek automatically
 
 
