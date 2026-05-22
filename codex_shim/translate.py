@@ -49,6 +49,11 @@ def responses_to_chat(body: dict[str, Any], upstream_model: str) -> dict[str, An
     _copy_if_present(body, chat, "max_tokens")
     _copy_if_present(body, chat, "parallel_tool_calls")
 
+    # Pass reasoning effort to OpenAI o-series models that support it.
+    effort = _extract_effort(body)
+    if effort and _is_openai_reasoning_model(upstream_model):
+        chat["reasoning_effort"] = effort
+
     tools = _responses_tools_to_chat_tools(body.get("tools"))
     if tools:
         chat["tools"] = tools
@@ -151,6 +156,16 @@ def responses_to_anthropic(body: dict[str, Any], upstream_model: str, max_tokens
         anthropic["system"] = "\n\n".join(system_parts)
     _copy_if_present(body, anthropic, "temperature")
     _copy_if_present(body, anthropic, "top_p")
+
+    # Enable extended thinking for Claude when the user selects a reasoning
+    # effort level.  Budget tokens are scaled to match Codex effort presets.
+    effort = _extract_effort(body)
+    if effort and effort != "minimal":
+        budget = _effort_to_anthropic_budget(effort)
+        if budget:
+            anthropic["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # Claude requires temperature=1 when thinking is enabled.
+            anthropic.pop("temperature", None)
 
     tools = _responses_tools_to_anthropic_tools(body.get("tools"))
     if tools:
@@ -407,3 +422,42 @@ def _jsonish(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, separators=(",", ":"))
+
+
+# ---------------------------------------------------------------------------
+# Reasoning effort helpers
+# ---------------------------------------------------------------------------
+
+def _extract_effort(body: dict[str, Any]) -> str | None:
+    """Extract the effort string from a Responses-API body.
+
+    Codex sends: ``{"reasoning": {"effort": "medium"}}``
+    """
+    reasoning = body.get("reasoning")
+    if isinstance(reasoning, dict):
+        effort = reasoning.get("effort")
+        if isinstance(effort, str) and effort:
+            return effort
+    return None
+
+
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
+
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    """Return True if this is an OpenAI o-series reasoning model."""
+    m = model.lower().lstrip("openai/")
+    return any(m.startswith(p) for p in _OPENAI_REASONING_PREFIXES)
+
+
+_EFFORT_TO_ANTHROPIC_BUDGET: dict[str, int] = {
+    "low":    1_024,
+    "medium": 5_000,
+    "high":   16_000,
+    "xhigh":  32_000,
+}
+
+
+def _effort_to_anthropic_budget(effort: str) -> int | None:
+    """Map a Codex effort level to an Anthropic thinking budget_tokens value."""
+    return _EFFORT_TO_ANTHROPIC_BUDGET.get(effort)

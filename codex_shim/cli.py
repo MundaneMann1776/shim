@@ -117,6 +117,7 @@ def generate(settings_path: Path, port: int) -> None:
 def install_codex_config(settings_path: Path, port: int, model_slug: str | None = None) -> None:
     models = FactorySettings(settings_path).load()
     default_slug = _resolve_model_slug(models, model_slug)
+    provider_name = _provider_name_for_slug(settings_path, default_slug)
     CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     original = CODEX_CONFIG_PATH.read_text() if CODEX_CONFIG_PATH.exists() else ""
@@ -125,7 +126,7 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
     cleaned = _remove_managed_config(original)
     cleaned = _remove_top_level_keys(cleaned, {"model", "model_provider", "model_catalog_json"})
     cleaned = _remove_section(cleaned, "model_providers.factory_byok_shim")
-    top_block, provider_block = _managed_config_blocks(default_slug, port)
+    top_block, provider_block = _managed_config_blocks(default_slug, port, provider_name)
     CODEX_CONFIG_PATH.write_text(top_block + "\n" + cleaned.lstrip() + "\n" + provider_block)
     print(f"Installed shim config into {CODEX_CONFIG_PATH}.")
     print(f"Original backup: {CODEX_CONFIG_BACKUP_PATH}")
@@ -405,7 +406,7 @@ end tell
         pass
 
 
-def _managed_config_blocks(default_slug: str, port: int) -> tuple[str, str]:
+def _managed_config_blocks(default_slug: str, port: int, provider_name: str = "Factory BYOK Shim") -> tuple[str, str]:
     top_block = f'''{MANAGED_BEGIN}
 model = "{default_slug}"
 model_provider = "factory_byok_shim"
@@ -415,7 +416,7 @@ model_catalog_json = "{CATALOG_PATH}"
 
     provider_block = f'''{MANAGED_BEGIN}
 [model_providers.factory_byok_shim]
-name = "Factory BYOK Shim"
+name = "{_toml_escape(provider_name)}"
 base_url = "http://127.0.0.1:{port}/v1"
 wire_api = "responses"
 experimental_bearer_token = "dummy"
@@ -425,6 +426,30 @@ stream_idle_timeout_ms = 600000
 {MANAGED_END}
 '''
     return top_block, provider_block
+
+
+def _provider_name_for_slug(settings_path: Path, slug: str) -> str:
+    """Return human-readable provider name for the given model slug."""
+    if slug == "gpt-5.5":
+        return "OpenAI (via Codex)"
+    try:
+        from .providers import PROVIDER_DEFS
+        # Load models using the real slug derivation, then match base_url to provider.
+        models = FactorySettings(settings_path).load()
+        for model in models:
+            if model.slug == slug:
+                base_url = model.base_url.rstrip("/")
+                for defn in PROVIDER_DEFS.values():
+                    if base_url.startswith(defn["base_url"]):
+                        return defn["name"]
+                break
+    except Exception:
+        pass
+    return "Factory BYOK Shim"
+
+
+def _toml_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _remove_managed_config(text: str) -> str:

@@ -15,6 +15,10 @@ def catalog_entry(model: FactoryModel) -> dict:
     truncation = min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
     return {
+        # The Codex binary identifies models by "model" (not "slug") when
+        # looking up displayName for the frontend.  Include both so that the
+        # config's `model = "<slug>"` round-trips correctly.
+        "model": model.slug,
         "slug": model.slug,
         "display_name": model.display_name,
         "description": f"{model.display_name} via local Factory BYOK shim.",
@@ -64,6 +68,7 @@ def catalog_entry(model: FactoryModel) -> dict:
 def chatgpt_passthrough_entry() -> dict:
     """Catalog entry for the original GPT-5.5 routed through ChatGPT passthrough."""
     return {
+        "model": "gpt-5.5",
         "slug": "gpt-5.5",
         "display_name": "GPT-5.5",
         "description": "OpenAI GPT-5.5 — the default Codex model, routed through ChatGPT passthrough.",
