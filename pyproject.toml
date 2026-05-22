@@ -1,14 +1,16 @@
 [project]
 name = "codex-factory-shim"
-version = "0.1.0"
-description = "Opt-in Codex BYOK shim generated from Factory custom models."
+version = "0.2.0"
+description = "Opt-in Codex BYOK shim with macOS menu bar app."
 requires-python = ">=3.11"
 dependencies = [
   "aiohttp>=3.9",
+  "rumps>=0.4.0",
 ]
 
 [project.scripts]
-codex-shim = "codex_shim.cli:main"
+codex-shim     = "codex_shim.cli:main"
+codex-shim-app = "codex_shim.menubar:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
