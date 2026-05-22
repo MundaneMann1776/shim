@@ -26,6 +26,9 @@ dist/
 .idea/
 .vscode/
 
+# Agent working rules — local-only, never committed
+CLAUDE.md
+
 # Built macOS app bundles — produced by bin/build-app
 # (bin/build-app installs into ~/Applications/shim.app — never into the project,
 # but keep this guard in case anyone builds in-tree by accident)
