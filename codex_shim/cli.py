@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import hashlib
+import struct
 from urllib.request import urlopen
 
 from .catalog import codex_config_overrides, write_catalog, write_config
@@ -354,6 +355,7 @@ def patch_codex_app() -> int:
         print("Could not find the expected model picker filter in Codex Desktop.", file=sys.stderr)
         return 1
     if changed:
+        _update_asar_integrity_hash(app_asar)
         _resign_codex_app()
     return 0
 
@@ -366,6 +368,8 @@ def restore_codex_app_bundle() -> int:
         return 0
     _quit_codex_app()
     app_asar.write_bytes(backup.read_bytes())
+    _update_asar_integrity_hash(app_asar)
+    _resign_codex_app()
     print(f"Restored {app_asar} from {backup}.")
     return 0
 
@@ -400,10 +404,44 @@ def _find_model_queries_bundle(workdir: Path, needle: str, replacement: str) -> 
     return None
 
 
+def _asar_header_hash(asar_path: Path) -> str:
+    """SHA-256 of the asar archive's JSON header — what Electron stores in
+    Info.plist as ElectronAsarIntegrity:Resources/app.asar:hash.
+
+    The asar pickle prefix is 16 bytes (4 × uint32 little-endian); the JSON
+    header is the next `json_size` bytes. Anything past that is file payload
+    and is not part of the integrity check.
+    """
+    with asar_path.open("rb") as f:
+        _, _, _, json_size = struct.unpack("<4I", f.read(16))
+        return hashlib.sha256(f.read(json_size)).hexdigest()
+
+
+def _update_asar_integrity_hash(asar_path: Path) -> None:
+    """Sync Info.plist's stored asar hash with the current archive.
+
+    Without this, Electron's startup integrity check fails with EXC_BREAKPOINT
+    and Codex crashes immediately. Re-signing the bundle alone is not enough —
+    the hash lives in Info.plist, independent of the code signature.
+    """
+    info_plist = Path("/Applications/Codex.app/Contents/Info.plist")
+    new_hash = _asar_header_hash(asar_path)
+    subprocess.run(
+        [
+            "/usr/libexec/PlistBuddy",
+            "-c",
+            f"Set :ElectronAsarIntegrity:Resources/app.asar:hash {new_hash}",
+            str(info_plist),
+        ],
+        check=True,
+    )
+    print(f"Updated ElectronAsarIntegrity hash to {new_hash[:12]}…")
+
+
 def _resign_codex_app() -> None:
-    # Electron validates app.asar through the bundle signature metadata at
-    # startup. Re-sign after patching so the modified archive does not trip the
-    # asar integrity check.
+    # Ad-hoc sign the bundle after modifying app.asar or Info.plist; the prior
+    # Apple signature is invalidated by either change. Gatekeeper will warn
+    # once on next launch.
     subprocess.run(
         ["codesign", "--force", "--deep", "--sign", "-", "/Applications/Codex.app"],
         check=True,

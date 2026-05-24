@@ -114,6 +114,22 @@ def test_remove_managed_config_warns_on_unterminated_block(capsys):
     assert "unterminated managed block" in captured.err
 
 
+def test_asar_header_hash_reads_only_json_header(tmp_path: Path):
+    """Build a minimal asar-shaped file and verify the hash covers exactly
+    the JSON header bytes, not the file payload that follows."""
+    import hashlib
+    import struct
+
+    header_json = b'{"files":{"a":{"size":3,"offset":"0"}}}'
+    payload = b"foo"
+    pickle = struct.pack("<4I", 16, 16 + len(header_json), len(header_json), len(header_json))
+    asar = tmp_path / "app.asar"
+    asar.write_bytes(pickle + header_json + payload)
+
+    expected = hashlib.sha256(header_json).hexdigest()
+    assert cli._asar_header_hash(asar) == expected
+
+
 def test_remove_managed_config_strips_complete_block_silently(capsys):
     text = (
         '# user before\nfoo = "bar"\n'
