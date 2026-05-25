@@ -114,6 +114,39 @@ def test_remove_managed_config_warns_on_unterminated_block(capsys):
     assert "unterminated managed block" in captured.err
 
 
+def test_poll_rebuild_logic_triggers_on_external_change():
+    """The poll loop must redraw the menu when active_slug changes outside the
+    menubar (CLI edits config.toml, user hand-edits, etc.). Regression test for
+    the case where menubar showed 'ChatGPT Subscription' while Codex was
+    actually routing through DeepSeek."""
+    from codex_shim.menubar import _SENTINEL
+
+    states = []
+
+    class Stub:
+        _last_active_slug = _SENTINEL
+
+        def _build_menu(self):
+            states.append(("rebuild", self._last_active_slug))
+
+    s = Stub()
+
+    def poll(active):
+        last = getattr(s, "_last_active_slug", _SENTINEL)
+        if last is _SENTINEL:
+            s._last_active_slug = active
+        elif last != active:
+            s._last_active_slug = active
+            s._build_menu()
+
+    poll(None)             # first poll — seed only, no rebuild
+    poll(None)             # same as last — no rebuild
+    poll("deepseek-v4")    # external change → rebuild
+    poll("deepseek-v4")    # same — no rebuild
+    poll(None)             # back to subscription → rebuild
+    assert states == [("rebuild", "deepseek-v4"), ("rebuild", None)]
+
+
 def test_asar_header_hash_reads_only_json_header(tmp_path: Path):
     """Build a minimal asar-shaped file and verify the hash covers exactly
     the JSON header bytes, not the file payload that follows."""

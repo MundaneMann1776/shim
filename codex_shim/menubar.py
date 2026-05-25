@@ -39,6 +39,7 @@ LOG_PATH = RUNTIME_DIR / "shim.log"
 ICON_RUNNING_SF = "arrow.triangle.2.circlepath"
 ICON_STOPPED_SF = "circle.dashed"
 MENU_BAR_TITLE = ""
+_SENTINEL = object()  # distinguishes "never polled" from "active is None"
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +443,16 @@ class CodexShimApp(rumps.App):
             )
         if hasattr(self, "_item_toggle"):
             self._item_toggle.title = "Stop shim" if running else "Start shim"
+
+        # Rebuild the menu when the active selection changes out from under us
+        # (e.g. config.toml edited by hand, or by `codex-shim` CLI). Otherwise
+        # checkmarks and the "Active:" header drift away from reality.
+        last = getattr(self, "_last_active_slug", _SENTINEL)
+        if last is _SENTINEL:
+            self._last_active_slug = active
+        elif last != active:
+            self._last_active_slug = active
+            self._build_menu()
 
     def _rebuild_and_poll(self) -> None:
         self._build_menu()
